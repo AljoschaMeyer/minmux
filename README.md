@@ -10,13 +10,13 @@ Within such a single connection, there might however be data streams that are lo
 
 To do so, minmux provides a namespace of unidirectional logical streams, each with a numeric identifier. All data is encapsulated in packets with a light header; this header addresses the stream to which the data pertains. There are different packet types, one for each possible action, each pertaining to a single logical stream. The actions come in pairs; for each action a sending endpoint can apply to an outgoing unidirectional logical stream, there is a corresponding action the receiving endpoint can perform on the incoming end.
 
-Flow control works with a credit-based scheme. A receiving endpoint can grant stream-specific *credit* to the sending endpoint. Writing data to a stream consumes credit; while credit for a stream is zero, the sending endpoint may not write to that stream. The unit of credit is not specified, credit could represent the permission to write individual bytes, or higher-level, application-specific concepts.
+Flow control works with a credit-based scheme. A receiving endpoint can grant stream-specific *credit* to the sending endpoint. Writing data to a stream consumes credit; while credit for a stream is zero, the sending endpoint may not write to that stream. The unit of credit is not specified, credit could represent the permission to write individual bytes, or higher-level, application-specific units.
 
-For minmux to function correctly, it is crucial that endpoints grand credit only for data which they can immediately process — granting credit is a binding promise that up to a certain amount of data will be read when it arrives. Because all logical streams are multiplexed over a single underlying stream, all received data must be processed immediately, lest it block some supposedly independent stream. The credit mechanism makes sure that the sending endpoint never overwhelms the receiver's ability to handle the incoming data sufficiently fast to not delay other streams. In practice, this usually means that incoming data is simply copied elsewhere in memory for later processing, so that further packets on the underlying connection can be handled without delay.
+For minmux to function correctly, it is crucial that endpoints grant credit only for data which they can immediately process — granting credit is a binding promise that up to a certain amount of data will be read when it arrives. Because all logical streams are multiplexed over a single underlying stream, all received data must be processed immediately, lest it block some supposedly independent stream. The credit mechanism makes sure that the sending endpoint never overwhelms the receiver's ability to handle the incoming data sufficiently fast to not delay other streams. In practice, this usually means that incoming data is simply copied elsewhere in memory for later processing, so that further packets on the underlying connection can be handled without delay.
 
 A minmux implementation must ensure that many writes to some logical stream do not starve out writes to other streams by fairly interleaving packets pertaining to different streams. A single write of a large amount of data could however still block other streams. Minmux does not provide any mechanism guarding against this situation, it is the responsibility of writers to split data into small (relative to the bandwidth of the underlying communication channel) chunks so that the fair interleaving suffices to maintain independence of all streams.
 
-Note that minmux does not provide facilities for negotiating which stream should be used by whom or for what, all it offers is a flat namespace of streams. The intention is that other, higher-level protocols can specify that they need, for example, two bidirectional streams and one unidirectional stream, the first two controlling transmission by byte, and the latter controlling transmissions by some specific encoding of a valid position in the game of go. Then a static mapping from these high-level streams to the logical streams of minmux can be specified ahead of time. Any failure to adhere to that specification, e.g., data being written to an unassigned stream, should be treated as an error and result in the connection being terminated, because clearly either an endpoint is faulty or the endpoints do not agree on a single protocol.
+Note that minmux does not provide facilities for negotiating which stream should be used by whom or for what, all it offers is a flat namespace of streams. The intention is that other, higher-level protocols can specify that they need, for example, two bidirectional streams and one unidirectional stream, the first two controlling transmission by byte, and the latter controlling transmissions by some specific encoding of a valid position in the game of go. Then a static mapping from these high-level streams to the logical streams of minmux can be specified ahead of time. Any failure to adhere to that specification, e.g., data being written to an unassigned stream, should be treated as an error and result in the connection being terminated, because clearly either an endpoint is faulty or the endpoints do not agree on a common protocol.
 
 It is of course possible to multiplex dynamically assigned streams, but the mapping to minmux streams must be done in a higher-level component of the protocol stack. If you choose to do so, know that a stream id is safe to reuse if and only if the sending endpoint has promised to not send anything again on this stream *and* the receiving endpoint has indicated that it will not grant any more credit for this stream.
 
@@ -41,20 +41,33 @@ enum Packet {
   // Write some items to a stream.
   Write {
     id: u64, // The stream to write to.
+    amount: u64, // How many items are encoded by the following data.
     data: Bytes, // The encoding of the items.
   },
   // You are not allowed to write more items to a stream than you have pending
   // credit on that stream. When writing items, reduce your available credit
-  // on the stream by the number of items that were written.
+  // on the stream by the `amount` of items that were written.
   //
-  // Minmux does not specify how a receiving endpoint can determine the number
-  // of items that have been written, an endpoint simply receives a bunch of
-  // bytes. This conversion must be specified in a higher level in the protocol
-  // stack.
+  // Minmux does not specify how items are encoded. This must be specified in a
+  // higher level in the protocol stack.
   //
+  // After the last write on a stream has been performed (see the `StopWrite`
+  // packet below), the writing endpoint is allowed to continue sending write
+  // packets whose data encode exactly one value of a predefined type of finite
+  // size. This special last item does not consume credit, an endpoint must
+  // allocate the resources for processing the dedicated last item when first
+  // creating the stream.
+  //
+  // Note that the type of the last item can be completely different from the
+  // regular items that are sent over the stream. If the unit type is chosen as
+  // the last item, then no data needs to be transferred. If the empty type is
+  // chosen, then the stream can never end, i.e., it would be forbidden to send
+  // `StopWrite` for that stream.
+
   // When you receive a `Write` packet sending more items than there was credit
   // available on the stream, this is an error and the connection should be
-  // terminated.
+  // terminated, unless the end of the stream has been reached and the packet
+  // carries (part of) the dedicated last item.
 
   // The next pair of packets allows to communicate that a stream will not be
   // used anymore, allowing both endpoints to reclaim resources.
@@ -82,6 +95,16 @@ enum Packet {
     id: u64, // The stream on which writing will stop.
     amount: u64, // How many more items this endpoint will still write at most.
   },
+  // This works analogously to `StopRead`, in that the endpoint may reduce the
+  // number of outstanding items with subsequent `StopWrite` packets, but it
+  // cannot extend it.
+  //
+  // Once the number of outstanding items reaches zero (which can always be
+  // achieved immediately by sending a `StopWrite` packet with an `amount` of
+  // zero), regular operation of the stream ends, and transmission of the
+  // dedicated last value begins.
+
+
   // This works analogously to `StopRead`: The endpoint may not write after it
   // has written the specified amount of items, and it may reduce the number of
   // outstanding items with subsequent `StopWrite` packets but it cannot extend
@@ -140,7 +163,7 @@ enum Packet {
 
 ## Encodings
 
-Each packet begins with a header that encodes the packet type and the id of the stream the packet pertains to. The header begins with a single byte. If the last six bits are all set to `1`, then this byte is followed by a [VarU64](https://github.com/AljoschaMeyer/varu64) indicating the stream id. Otherwise, the last six bits encode the stream id directly. The packet type depends on the first two bits and the parity of the stream id, as given in the following table. A `0` in the "Stream id parity" indicates that the parity is even if the packet is encoded by the proactive endpoint and odd if the packet is encoded by the reactive endpoint. A `1` indicates the opposite parity. If this seems confusing, remember that the parity of a stream id and the role of the endpoint determine whether that endpoint reads from or writes to that stream.
+Each packet begins with a header that encodes the packet type and the id of the stream the packet pertains to. The header begins with a single byte. If the last six bits are all set to `1`, then this byte is followed by a [VarU64](https://github.com/AljoschaMeyer/varu64) indicating the stream id. Otherwise, the last six bits encode the stream id directly. The packet type depends on the first two bits and the parity of the stream id, as given in the following table. A `0` in the "Stream id parity" column indicates that the parity is even if the packet is encoded by the proactive endpoint and odd if the packet is encoded by the reactive endpoint. A `1` indicates the opposite parity. If this seems confusing, remember that the parity of a stream id and the role of the endpoint determine whether that endpoint reads from or writes to that stream.
 
 | First two bits | Stream id parity | Packet |
 |---|---|---|
@@ -158,7 +181,7 @@ Each such header is then followed by packet-specific data:
 | Packet | Additional data |
 |---|---|
 | GiveCredit | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
-| Write | The data to write. |
+| Write | The `amount` of items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the concatenation of the encodings of each item. |
 | StopRead | The `amount` of items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | StopWrite | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | Oops | The `maximum` of credit to retain, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
@@ -166,4 +189,15 @@ Each such header is then followed by packet-specific data:
 | RequestItems | The `base` of unconsumed credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | RequestCredit | The `base` of available credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 
-Note that the header of a `Write` packet is followed by bytes whose format is not governed by the minmux specification. Determining when the packet ends and how much credit it consumes must be done according to some higher-level specification.
+Note that the `amount` of a `Write` packet is followed by bytes whose format is not governed by the minmux specification. Determining when the packet ends must be done according to some higher-level specification.
+
+## Instantiating Minmux
+
+In order to specify an instance of minmux, the following information must be given:
+
+- Which stream ids are in use?
+- For each stream:
+  - What is the type of regular items?
+  - How are they encoded?
+  - What is the type of the dedicated last item?
+  - How is it encoded?
