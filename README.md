@@ -140,8 +140,8 @@ enum Packet {
   // bounds.
   //
   // If the promises are not kept, the other endpoint may consider this an
-  // error, but it does not have to (implementations of us not forced to track
-  // this information if they would not use it for optimizations anyways).
+  // error, but it does not have to (implementations are thus not forced to
+  // track this information if they would not use it for optimizations anyways).
 
   // Promise to perform at least some more writes, provided the required credit
   // will be eventually granted.
@@ -153,7 +153,7 @@ enum Packet {
   // Promise to perform at least some more reads, although the credit might not
   // be given immediately.
   PromiseRead {
-    id: u64, // The stream on which more Credit is being promised.
+    id: u64, // The stream on which more credit is being promised.
     amount: NonZeroU64, // How much more credit is being promised.
   }
 }
