@@ -35,13 +35,13 @@ enum Packet {
   // Allow the other endpoint to write more items to some stream.
   GiveCredit {
     id: u64, // The stream they are allowed to write more to.
-    amount: u64, // How many more items they are allowed to write.
+    amount: NonZeroU64, // How many more items they are allowed to write.
   },
 
   // Write some items to a stream.
   Write {
     id: u64, // The stream to write to.
-    amount: u64, // How many items are encoded by the following data.
+    amount: NonZeroU64, // How many items are encoded by the following data.
     data: Bytes, // The encoding of the items.
   },
   // You are not allowed to write more items to a stream than you have pending
@@ -118,7 +118,7 @@ enum Packet {
   // Forgo some credit without using it to send items.
   ForgoCredit {
     id: u64, // The stream on which to decrease the credit this endpoint has.
-    amount: u64, // How much credit to give up on.
+    amount: NonZeroU64, // How much credit to give up on.
   },
 
   // Kindly ask the other endpoint to forgo some of its credit.
@@ -147,7 +147,7 @@ enum Packet {
   RequestCredit {
     id: u64, // The stream on which more credit is required.
     base: u64, // The available credit as of sending this packet.
-    amount: u64, // How much more credit is required.
+    amount: NonZeroU64, // How much more credit is required.
   },
 
   // Inform the other endpoint that it will need to write at least some more
@@ -156,7 +156,7 @@ enum Packet {
     id: u64, // The stream on which more items are required.
     base: u64, // The amount of unconsumed credit the other endpoint has as of
                // sending this packet.
-    amount: u64, // How many more items are required.
+    amount: NonZeroU64, // How many more items are required.
   }
 }
 ```
@@ -180,14 +180,14 @@ Each such header is then followed by packet-specific data:
 
 | Packet | Additional data |
 |---|---|
-| GiveCredit | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
-| Write | The `amount` of items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the concatenation of the encodings of each item. |
+| GiveCredit | The `amount` of credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
+| Write | The `amount` of items, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers), followed by the concatenation of the encodings of each item. |
 | StopRead | The `amount` of items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | StopWrite | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | Oops | The `maximum` of credit to retain, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
-| ForgoCredit | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
-| RequestItems | The `base` of unconsumed credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested items, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
-| RequestCredit | The `base` of available credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
+| ForgoCredit | The `amount` of credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
+| RequestItems | The `base` of unconsumed credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested items, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
+| RequestCredit | The `base` of available credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
 
 Note that the `amount` of a `Write` packet is followed by bytes whose format is not governed by the minmux specification. Determining when the packet ends must be done according to some higher-level specification.
 
