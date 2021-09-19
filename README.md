@@ -135,28 +135,26 @@ enum Packet {
   // to ignore it - in particular it may have concurrently performed writes
   // using that credit.
 
-  // The last two packets allow to inform the other endpoint of minimum
-  // resource requirements, allowing it to prepare for the coming load.
+  // Whereas `StopRead` and `StopWrite` packets specify an upper bound on the
+  // number of future reads or writes, the final two packets indicate lower
+  // bounds.
   //
-  // Neither packet has any direct impact on the protocol, they are merely
-  // informative. An endpoint is not required to actually consume the requested
-  // resources, and it can update requests at any point to any value.
+  // If the promises are not kept, the other endpoint may consider this an
+  // error, but it does not have to (implementations of us not forced to track
+  // this information if they would not use it for optimizations anyways).
 
-  // Inform the other endpoint that it will need to issue at least some more
-  // credit so that this endpoint can meaningfully complete its work.
-  RequestCredit {
-    id: u64, // The stream on which more credit is required.
-    base: u64, // The available credit as of sending this packet.
-    amount: NonZeroU64, // How much more credit is required.
+  // Promise to perform at least some more writes, provided the required credit
+  // will be eventually granted.
+  PromiseWrite {
+    id: u64, // The stream on which more items are being promised.
+    amount: NonZeroU64, // How many items are being promised.
   },
 
-  // Inform the other endpoint that it will need to write at least some more
-  // items so that this endpoint can meaningfully complete its work.
-  RequestItems {
-    id: u64, // The stream on which more items are required.
-    base: u64, // The amount of unconsumed credit the other endpoint has as of
-               // sending this packet.
-    amount: NonZeroU64, // How many more items are required.
+  // Promise to perform at least some more reads, although the credit might not
+  // be given immediately.
+  PromiseRead {
+    id: u64, // The stream on which more Credit is being promised.
+    amount: NonZeroU64, // How much more credit is being promised.
   }
 }
 ```
@@ -173,8 +171,8 @@ Each packet begins with a header that encodes the packet type and the id of the 
 | 01 | 1 | StopWrite |
 | 10 | 0 | Oops |
 | 10 | 1 | ForgoCredit |
-| 11 | 0 | RequestItems |
-| 11 | 1 | RequestCredit |
+| 11 | 0 | PromiseWrite |
+| 11 | 1 | PromiseRead |
 
 Each such header is then followed by packet-specific data:
 
@@ -186,8 +184,8 @@ Each such header is then followed by packet-specific data:
 | StopWrite | The `amount` of credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | Oops | The `maximum` of credit to retain, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64). |
 | ForgoCredit | The `amount` of credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
-| RequestItems | The `base` of unconsumed credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested items, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
-| RequestCredit | The `base` of available credit, encoded as a [VarU64](https://github.com/AljoschaMeyer/varu64), followed by the `amount` of requested credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
+| PromiseWrite | The `amount` of promised items, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
+| PromiseRead | The `amount` of promised credit, encoded as a [VarNonZeroU64](https://github.com/AljoschaMeyer/varu64#non-zero-unsigned-integers). |
 
 Note that the `amount` of a `Write` packet is followed by bytes whose format is not governed by the minmux specification. Determining when the packet ends must be done according to some higher-level specification.
 
