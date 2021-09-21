@@ -2,6 +2,8 @@
 
 A minimalistic multiplexing specification.
 
+**Status: freshly specified, needs more time before it can be declared stable.**
+
 ## What, Why, and How?
 
 Establishing reliable connections between programs over a network can be expensive. TCP requires a three-way handshake, setting up encryption requires additional roundtrips, and the whole thing might be routed through [tor](https://www.torproject.org). In addition to connection setup time, each tcp connection requires keeping track of state, usually managed by the operating system. For these reasons, it is often desirable to create at most one tcp connection between two programs.
@@ -196,6 +198,6 @@ In order to specify an instance of minmux, the following information must be giv
 - Which stream ids are in use?
 - For each stream:
   - What is the type of regular items?
-  - How are they encoded?
+    - How are they encoded?
   - What is the type of the dedicated last item?
-  - How is it encoded?
+    - How is it encoded?
